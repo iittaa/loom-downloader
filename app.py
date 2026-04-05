@@ -258,8 +258,13 @@ HTML = """<!DOCTYPE html>
     display: none;
   }
   .transcript-box.show { display: block; }
-  .copy-btn {
+  .transcript-actions {
     margin-top: 0.5rem;
+    display: none;
+    gap: 0.5rem;
+  }
+  .transcript-actions.show { display: flex; }
+  .copy-btn {
     padding: 0.5rem 1rem;
     background: #2a2a3e;
     border: 1px solid #3a3a5e;
@@ -267,10 +272,14 @@ HTML = """<!DOCTYPE html>
     color: #ccc;
     font-size: 0.8rem;
     cursor: pointer;
-    display: none;
   }
-  .copy-btn.show { display: inline-block; }
   .copy-btn:hover { background: #3a3a5e; }
+  .gemini-link {
+    background: linear-gradient(135deg, #1a73e8, #4285f4);
+    border-color: #1a73e8;
+    color: #fff;
+  }
+  .gemini-link:hover { opacity: 0.9; }
   .error {
     background: #2d1a1a;
     border: 1px solid #5c2a2a;
@@ -323,7 +332,10 @@ HTML = """<!DOCTYPE html>
       <button class="transcript-btn" id="transcriptBtn" onclick="fetchTranscript()">文字起こし</button>
     </div>
     <div class="transcript-box" id="transcriptBox"></div>
-    <button class="copy-btn" id="copyBtn" onclick="copyTranscript()">コピー</button>
+    <div class="transcript-actions" id="transcriptActions">
+      <button class="copy-btn show" onclick="copyTranscript()">コピー</button>
+      <button class="copy-btn show gemini-link" onclick="openGemini()">Geminiで校正する</button>
+    </div>
   </div>
 </div>
 <script>
@@ -376,7 +388,7 @@ async function fetchTranscript() {
   btn.disabled = true;
   btn.textContent = "取得中...";
   $("transcriptBox").classList.remove("show");
-  $("copyBtn").classList.remove("show");
+  $("transcriptActions").classList.remove("show");
 
   try {
     const resp = await fetch("/api/transcript?url=" + encodeURIComponent(url));
@@ -390,7 +402,7 @@ async function fetchTranscript() {
 
     $("transcriptBox").textContent = data.transcript;
     $("transcriptBox").classList.add("show");
-    $("copyBtn").classList.add("show");
+    $("transcriptActions").classList.add("show");
   } catch (e) {
     $("error").textContent = "エラーが発生しました: " + e.message;
     $("error").classList.add("show");
@@ -403,9 +415,18 @@ async function fetchTranscript() {
 function copyTranscript() {
   const text = $("transcriptBox").textContent;
   navigator.clipboard.writeText(text).then(() => {
-    const btn = $("copyBtn");
-    btn.textContent = "コピーしました!";
-    setTimeout(() => { btn.textContent = "コピー"; }, 1500);
+    event.target.textContent = "コピーしました!";
+    setTimeout(() => { event.target.textContent = "コピー"; }, 1500);
+  });
+}
+
+function openGemini() {
+  const text = $("transcriptBox").textContent;
+  const prompt = "以下はLoom動画の自動文字起こしです。誤字脱字の修正、句読点の補正、話し言葉の整形を行って、読みやすい文章に校正してください。意味は変えないでください。\n\n---\n\n" + text;
+  navigator.clipboard.writeText(prompt).then(() => {
+    window.open("https://gemini.google.com/app", "_blank");
+    event.target.textContent = "プロンプトをコピーしました";
+    setTimeout(() => { event.target.textContent = "Geminiで校正する"; }, 2000);
   });
 }
 </script>
