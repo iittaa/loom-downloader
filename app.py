@@ -280,6 +280,34 @@ HTML = """<!DOCTYPE html>
     color: #fff;
   }
   .gemini-link:hover { opacity: 0.9; }
+  .gemini-prompt-box {
+    margin-top: 1rem;
+    padding: 1rem;
+    background: #12121f;
+    border: 1px solid #1a73e8;
+    border-radius: 10px;
+    display: none;
+  }
+  .gemini-prompt-box.show { display: block; }
+  .gemini-prompt-label {
+    font-size: 0.8rem;
+    color: #4285f4;
+    margin-bottom: 0.75rem;
+    font-weight: 600;
+  }
+  .gemini-prompt-text {
+    font-size: 0.9rem;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    max-height: 300px;
+    overflow-y: auto;
+    color: #ccc;
+  }
+  .gemini-prompt-actions {
+    margin-top: 0.75rem;
+    display: flex;
+    gap: 0.5rem;
+  }
   .error {
     background: #2d1a1a;
     border: 1px solid #5c2a2a;
@@ -309,9 +337,30 @@ HTML = """<!DOCTYPE html>
     margin-right: 0.5rem;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .toast {
+    position: fixed;
+    top: 1.5rem;
+    left: 50%;
+    transform: translateX(-50%) translateY(-20px);
+    background: #10b981;
+    color: #fff;
+    padding: 0.75rem 1.5rem;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: 0.95rem;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s, transform 0.3s;
+    z-index: 1000;
+  }
+  .toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
 </style>
 </head>
 <body>
+<div class="toast" id="toast"></div>
 <div class="container">
   <h1>Loom Downloader</h1>
   <p class="subtitle">LoomのURLを貼り付けてMP4でダウンロード</p>
@@ -333,8 +382,15 @@ HTML = """<!DOCTYPE html>
     </div>
     <div class="transcript-box" id="transcriptBox"></div>
     <div class="transcript-actions" id="transcriptActions">
-      <button class="copy-btn show" onclick="copyTranscript()">コピー</button>
-      <button class="copy-btn show gemini-link" onclick="openGemini()">Geminiで校正する</button>
+      <button class="copy-btn" onclick="copyTranscript()">文字起こしをコピー</button>
+    </div>
+    <div class="gemini-prompt-box" id="geminiPromptBox">
+      <div class="gemini-prompt-label">Gemini校正用プロンプト（コピーしてGeminiに貼り付け）</div>
+      <div class="gemini-prompt-text" id="geminiPromptText"></div>
+      <div class="gemini-prompt-actions">
+        <button class="copy-btn" onclick="copyGeminiPrompt()">コピー</button>
+        <a class="copy-btn gemini-link" href="https://gemini.google.com/app" target="_blank">Geminiを開く</a>
+      </div>
     </div>
   </div>
 </div>
@@ -389,6 +445,7 @@ async function fetchTranscript() {
   btn.textContent = "取得中...";
   $("transcriptBox").classList.remove("show");
   $("transcriptActions").classList.remove("show");
+  $("geminiPromptBox").classList.remove("show");
 
   try {
     const resp = await fetch("/api/transcript?url=" + encodeURIComponent(url));
@@ -403,6 +460,17 @@ async function fetchTranscript() {
     $("transcriptBox").textContent = data.transcript;
     $("transcriptBox").classList.add("show");
     $("transcriptActions").classList.add("show");
+
+    // Gemini用プロンプトを生成して表示
+    const promptLines = [
+      "以下の文章は動画の自動文字起こしです。誤字脱字の修正、句読点の補正、話し言葉の整形を行い、読みやすい文章に校正してください。意味は変えないでください。",
+      "",
+      "---",
+      "",
+      data.transcript
+    ];
+    $("geminiPromptText").textContent = promptLines.join(String.fromCharCode(10));
+    $("geminiPromptBox").classList.add("show");
   } catch (e) {
     $("error").textContent = "エラーが発生しました: " + e.message;
     $("error").classList.add("show");
@@ -412,22 +480,23 @@ async function fetchTranscript() {
   }
 }
 
-function copyTranscript() {
-  const text = $("transcriptBox").textContent;
-  navigator.clipboard.writeText(text).then(() => {
-    event.target.textContent = "コピーしました!";
-    setTimeout(() => { event.target.textContent = "コピー"; }, 1500);
-  });
+function showToast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 2000);
 }
 
-function openGemini() {
-  const text = $("transcriptBox").textContent;
-  const prompt = "以下はLoom動画の自動文字起こしです。誤字脱字の修正、句読点の補正、話し言葉の整形を行って、読みやすい文章に校正してください。意味は変えないでください。\n\n---\n\n" + text;
-  navigator.clipboard.writeText(prompt).then(() => {
-    window.open("https://gemini.google.com/app", "_blank");
-    event.target.textContent = "プロンプトをコピーしました";
-    setTimeout(() => { event.target.textContent = "Geminiで校正する"; }, 2000);
-  });
+function copyWithFeedback(text, msg) {
+  navigator.clipboard.writeText(text).then(() => showToast(msg));
+}
+
+function copyTranscript() {
+  copyWithFeedback($("transcriptBox").textContent, "文字起こしをコピーしました!");
+}
+
+function copyGeminiPrompt() {
+  copyWithFeedback($("geminiPromptText").textContent, "Gemini用プロンプトをコピーしました!");
 }
 </script>
 </body>
