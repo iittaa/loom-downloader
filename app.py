@@ -13,7 +13,7 @@ def extract_video_id(url: str) -> str | None:
     return m.group(1) if m else None
 
 
-async def get_mp4_url(video_id: str) -> dict:
+async def get_video_info(video_id: str) -> dict:
     async with httpx.AsyncClient(timeout=15) as client:
         # 動画メタデータ取得
         meta = await client.get(f"https://www.loom.com/v1/videos/{video_id}")
@@ -37,6 +37,30 @@ async def get_mp4_url(video_id: str) -> dict:
     }
 
 
+async def get_transcript(video_id: str) -> str | None:
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        # 共有ページHTMLからトランスクリプトの署名付きURLを取得
+        page = await client.get(f"https://www.loom.com/share/{video_id}")
+        page.raise_for_status()
+
+        m = re.search(
+            r"(https://cdn\.loom\.com/mediametadata/transcription/[^\"\\\s]+)",
+            page.text,
+        )
+        if not m:
+            return None
+
+        # 署名付きURLからトランスクリプトJSON取得
+        transcript_url = m.group(1)
+        resp = await client.get(transcript_url)
+        resp.raise_for_status()
+        data = resp.json()
+
+        # フレーズを結合してテキストに変換
+        phrases = data.get("phrases", [])
+        return "\n\n".join(p["value"] for p in phrases if p.get("value"))
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return HTML
@@ -48,9 +72,25 @@ async def api_video(url: str):
     if not video_id:
         return {"error": "無効なLoom URLです"}
     try:
-        return await get_mp4_url(video_id)
+        return await get_video_info(video_id)
     except httpx.HTTPStatusError as e:
         return {"error": f"動画の取得に失敗しました (HTTP {e.response.status_code})"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/transcript")
+async def api_transcript(url: str):
+    video_id = extract_video_id(url)
+    if not video_id:
+        return {"error": "無効なLoom URLです"}
+    try:
+        text = await get_transcript(video_id)
+        if text is None:
+            return {"error": "この動画には文字起こしデータがありません"}
+        return {"transcript": text}
+    except httpx.HTTPStatusError as e:
+        return {"error": f"文字起こしの取得に失敗しました (HTTP {e.response.status_code})"}
     except Exception as e:
         return {"error": str(e)}
 
@@ -61,7 +101,7 @@ async def api_download(url: str, title: str = "loom_video"):
     if not video_id:
         return {"error": "無効なLoom URLです"}
 
-    info = await get_mp4_url(video_id)
+    info = await get_video_info(video_id)
     mp4_url = info["mp4_url"]
     filename = re.sub(r'[\\/:*?"<>|]', "_", info["title"]) + ".mp4"
 
@@ -182,6 +222,55 @@ HTML = """<!DOCTYPE html>
     transition: opacity 0.2s;
   }
   .download-btn:hover { opacity: 0.9; }
+  .btn-row {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+  .btn-row a, .btn-row button {
+    flex: 1;
+    text-align: center;
+    padding: 0.85rem;
+    border-radius: 10px;
+    color: #fff;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 1rem;
+    transition: opacity 0.2s;
+    cursor: pointer;
+    border: none;
+  }
+  .transcript-btn {
+    background: linear-gradient(135deg, #625df5, #8b5cf6);
+  }
+  .transcript-btn:hover { opacity: 0.9; }
+  .transcript-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .transcript-box {
+    margin-top: 1rem;
+    padding: 1rem;
+    background: #12121f;
+    border-radius: 10px;
+    max-height: 300px;
+    overflow-y: auto;
+    font-size: 0.9rem;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    display: none;
+  }
+  .transcript-box.show { display: block; }
+  .copy-btn {
+    margin-top: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: #2a2a3e;
+    border: 1px solid #3a3a5e;
+    border-radius: 8px;
+    color: #ccc;
+    font-size: 0.8rem;
+    cursor: pointer;
+    display: none;
+  }
+  .copy-btn.show { display: inline-block; }
+  .copy-btn:hover { background: #3a3a5e; }
   .error {
     background: #2d1a1a;
     border: 1px solid #5c2a2a;
@@ -229,7 +318,12 @@ HTML = """<!DOCTYPE html>
       <span id="resolution"></span>
       <span id="duration"></span>
     </div>
-    <a class="download-btn" id="dlBtn" href="#">ダウンロード</a>
+    <div class="btn-row">
+      <a class="download-btn" id="dlBtn" href="#">ダウンロード</a>
+      <button class="transcript-btn" id="transcriptBtn" onclick="fetchTranscript()">文字起こし</button>
+    </div>
+    <div class="transcript-box" id="transcriptBox"></div>
+    <button class="copy-btn" id="copyBtn" onclick="copyTranscript()">コピー</button>
   </div>
 </div>
 <script>
@@ -272,6 +366,47 @@ async function fetchVideo() {
     $("btn").disabled = false;
     $("spinner").classList.remove("show");
   }
+}
+
+async function fetchTranscript() {
+  const url = $("url").value.trim();
+  if (!url) return;
+
+  const btn = $("transcriptBtn");
+  btn.disabled = true;
+  btn.textContent = "取得中...";
+  $("transcriptBox").classList.remove("show");
+  $("copyBtn").classList.remove("show");
+
+  try {
+    const resp = await fetch("/api/transcript?url=" + encodeURIComponent(url));
+    const data = await resp.json();
+
+    if (data.error) {
+      $("error").textContent = data.error;
+      $("error").classList.add("show");
+      return;
+    }
+
+    $("transcriptBox").textContent = data.transcript;
+    $("transcriptBox").classList.add("show");
+    $("copyBtn").classList.add("show");
+  } catch (e) {
+    $("error").textContent = "エラーが発生しました: " + e.message;
+    $("error").classList.add("show");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "文字起こし";
+  }
+}
+
+function copyTranscript() {
+  const text = $("transcriptBox").textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = $("copyBtn");
+    btn.textContent = "コピーしました!";
+    setTimeout(() => { btn.textContent = "コピー"; }, 1500);
+  });
 }
 </script>
 </body>
